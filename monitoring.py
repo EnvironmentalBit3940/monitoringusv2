@@ -1,47 +1,81 @@
-import os
 from database import UseDB as db
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from os import popen, system
+import telebot
+import logging
+from secret import TOKEN, CHAT_ID
+
+# Настройка лога
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+handler = logging.FileHandler('monitoring.log')
+handler.setLevel(logging.WARNING)
+
+formatter = logging.Formatter('%(asctime)s - %(message)s')
+handler.setFormatter(formatter)
+
+logger.addHandler(handler)
+
+# Настройка бота
+
+bot = telebot.TeleBot(TOKEN)
+
+bot.send_message(CHAT_ID, 'Я работаю тут!')
 
 
-# TODO: ups_mon
+# TODO: ups_mon, сообщения для телеги
 # Объявление асинхронных функций
 def check_status(host):
-    k = db.get_status(host)
+    name, dev_type, old_status, msg = db().get_device(host)
     # Для AP
-    if k[0] == 1:
-        ap_status = k[1]
+    status = int(old_status)
+    logger.info('Проверяю %s...', name)
+    if dev_type == 1:
+        resp = system(f'ping -c 3 -W 2 {host} > /dev/null')
+        # Если не ответил и статус не нулевой
+        if resp != 0 and status != 0:
+            status = 0
+            db().update_status(host, status)
+            logger.warning('%s упал', name)
+            bot.send_message(CHAT_ID, f'{name if name else host} упал, поднимите')
+        # Если хоть раз не ответил, но сейчас норм
+        elif resp == 0 and status != 1:
+            status = 1
+            db().update_status(host, status)
+            logger.warning('%s поднялся', name)
+            bot.send_message(CHAT_ID, f'{name if name else host} поднялся!')
     # Для PC
-    elif k[0] == 2:
-        ap_status = k[2]
-    
-    
+    elif dev_type == 2:
+        resp_nbt = popen(f'nbtscan -t 1000 {host} | grep {host}').read().split('\n')[1]
+        # Не пришло ответа
+        logger.debug('%s, resp_nbt: %s', name, resp_nbt)
+        if resp_nbt == '':
+            resp_nmap = popen(f'nmap -O {host} | grep MAC').read()
+            logger.debug('%s, resp_nmap: %s', name, resp_nmap)
+            if 'MAC' not in resp_nmap and status != 0:
+                status = 0
+                db().update_status(host, status)
+                logger.warning('%s упал', name)
+                bot.send_message(CHAT_ID, f'{name if name else host} упал, поднимите')
+            elif 'MAC' in resp_nmap and status !=1:
+                status = 1
+                db().update_status(host, status)
+                logger.warning('%s поднялся', name)
+                bot.send_message(CHAT_ID, f'{name if name else host} поднялся!')
+        # Пришел ответ, а до этого был мертвым
+        elif resp_nbt != '' and status != 1:
+            status = 1
+            db().update_status(host, status)
+            logger.info('%s поднялся', name)
+            bot.send_message(CHAT_ID, f'{name if name else host} поднялся!')
 
-def ap_mon(host):
-    k = db.get_status(host)
-    resp = os.system(f'ping -c 1 {host}')
-    if resp != 0 and k[host] == 3:
-        db().update_status(host, 0)
-        # TODO: отпрвка в телегу
-    elif resp != 0:
-        k += 1
-    else:
-        db().update_status(host, 1)
-        k = 0
+    return host, status, {True: "changed", False: "stay"}[old_status != status]
 
 
-def pc_mon(host):
-    resp = os.system(f'nmap {host}')
-    if resp != 0:
-        db().update_status(host, 0)
-        # TODO: отправка в телегу
-    else:
-        db().update_status(host, 1)
-
-
-def main():
-    ips_list = {}
-    ips_list['pc'], ips_list['ap'] = db().get_by_type(2), db().get_by_type(1)
-    
-    with ThreadPoolExecutor(4) as execut:
-        results['pc'] = execut.map(pc_mon, ips_list['pc'])
-        results['ap'] = execut.map(ap_mon, ips_list['ap'])
+while True:
+    dev_list = db().get_all()
+    results, ips_list = [], []
+    [ips_list.append(row[2]) for row in dev_list]
+    with ThreadPoolExecutor() as execut:
+        results.append(execut.map(check_status, ips_list))

@@ -1,5 +1,6 @@
 *.kdev4
 secret.py
-__pycahce__
+__pycache__/
+*.bak*
 *.db
 *.log

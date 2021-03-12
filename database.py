@@ -4,25 +4,26 @@ import logging as log
 log.basicConfig(filename='')
 
 
+# TODO: Переход на Redis?
 class UseDB:
-    # Status: 0 - Упал, 1 - Живой, 2 - Отключен; 
-    # Для AP: 0 - умер, 1,2 - живой, 2 или 1 раз пинг не прошел
-    # 3 - живой
+    # Status: 0 - Упал, 1 - Живой, 2 - Отключен; -1 - Не проверялся
     def update_status(self, ip, status):
         self.cur.execute('UPDATE devices SET status=? WHERE ip=?',
                          [status, ip])
+        self.con.commit()
 
-    def get_status(self, ip):
-        for row in self.cur.execute(f'''SELECT type, status FROM devices 
-                                    WHERE ip="{ip}"'''):
+    def get_device(self, ip):
+        for row in self.cur.execute(f'''SELECT name, type, status, message
+                                    FROM devices
+                                    WHERE ip=?''', [ip]):
             return row
 
     def get_all(self):
         self.devices_list = []
-        for row in self.cur.execute('SELECT * FROM devices'):
+        for row in self.cur.execute('SELECT * FROM devices ORDER BY ip DESC'):
             self.devices_list.append(row)
         return self.devices_list
-    
+
     # Type: 0 - UPS, 1 - Сетевое ус-во, 2 - комп
     def get_by_type(self, dev_type):
         self.devices_list = []
@@ -30,6 +31,12 @@ class UseDB:
                                     [dev_type]):
             self.devices_list.append(row)
         return self.devices_list
+
+    def remove_device(self, dev_id):
+        print(dev_id)
+        self.cur.execute('DELETE FROM devices WHERE id=?', [dev_id])
+        self.con.commit()
+        return 0
 
     def add_device(self, name, ip, dev_type, message=''):
         if dev_type.lower() in ['pc', 'ap', 'ups']:
@@ -42,7 +49,6 @@ class UseDB:
                         VALUES (?, ?, ?, ?, 0)''', [name, ip, dev_type, message])
         self.con.commit()
         return 0
-        
 
     def __init__(self):
         self.con = sqlite3.connect('devices.db')
@@ -53,7 +59,7 @@ class UseDB:
                          ip TEXT NOT NULL,
                          type integer NOT NULL,
                          message text,
-                         status integer)''')
+                         status default -1)''')
         self.con.commit()
 
 
